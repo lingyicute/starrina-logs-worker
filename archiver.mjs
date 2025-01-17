@@ -46,12 +46,26 @@ export default {
       const fileName = `${dateStr}.jsonl`;
       await env.STARRINA_LOGS.put(fileName, jsonlContent);
       
-      // 删除已归档的日志
-      for (const key of await env.REQUEST_LOG.list({ prefix: 'request:' })) {
-        await env.REQUEST_LOG.delete(key.name);
+      // 删除已归档的日志，进行分页处理
+      let deleteComplete = false;
+      cursor = undefined; // 重置分页指针
+
+      while (!deleteComplete) {
+        const result = await env.REQUEST_LOG.list({
+          prefix: 'request:',
+          cursor
+        });
+
+        // 删除当前页面的日志
+        for (const key of result.keys) {
+          await env.REQUEST_LOG.delete(key.name);
+        }
+
+        cursor = result.cursor;
+        deleteComplete = result.list_complete;
       }
       
-      console.log(`成功归档 ${logs.length} 条日志到 ${fileName}`);
+      console.log(`成功归档 ${logs.length} 条日志到 ${fileName} 并删除了已归档的日志`);
       
     } catch (error) {
       console.error('归档日志时发生错误:', error);
