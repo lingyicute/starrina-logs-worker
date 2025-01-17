@@ -1,74 +1,60 @@
 export default {
-  // 配置 cron 触发器为每10天运行一次
+  // 设置 cron 触发器，北京时间每周一凌晨3点运行（UTC 时间周日 19:00）
+  scheduled: "0 19 * * 0",
+  
   async scheduled(event, env, ctx) {
     try {
-      // 获取当前时间戳
-      const now = new Date();
-      const timestamp = now.toISOString();
-
-      // 计算10天前的时间戳
-      const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
-      const startTimestamp = tenDaysAgo.toISOString();
-
-      // 构建归档文件名
-      const archiveFileName = `request-logs-${startTimestamp.split('T')[0]}-to-${timestamp.split('T')[0]}.jsonl`;
-
-      // 获取所有符合时间范围的记录
-      const records = [];
-      let cursor = null;
-
-      do {
-        // 使用 list 方法获取所有以 request: 开头的键
-        const listResult = await env.REQUEST_LOG.list({
-          prefix: 'request:',
-          cursor,
-          limit: 1000 // 每次获取1000条记录
+      // 获取当前日期（北京时间）
+      const date = new Date();
+      date.setHours(date.getHours() + 8); // 转换为北京时间
+      const dateStr = date.toISOString().split('T')[0];
+      
+      // 准备一个数组存储所有日志
+      const logs = [];
+      
+      // 列出所有 KV 中的日志记录
+      let listComplete = false;
+      let cursor = undefined;
+      
+      while (!listComplete) {
+        const result = await env.REQUEST_LOG.list({ 
+          prefix: 'request:', 
+          cursor 
         });
-        cursor = listResult.cursor;
-
-        // 获取每条记录的内容
-        for (const key of listResult.keys) {
-          const value = await env.REQUEST_LOG.get(key.name);
-          if (value) {
-            const record = JSON.parse(value);
-            // 转换时间戳并只收集10天前的记录
-            const recordTimestamp = new Date(record.timestamp).getTime();
-            const start = new Date(startTimestamp).getTime();
-            const end = new Date(timestamp).getTime();
-
-            if (recordTimestamp >= start && recordTimestamp < end) {
-              records.push(record);
-            }
+        
+        // 获取所有日志内容
+        for (const key of result.keys) {
+          const logEntry = await env.REQUEST_LOG.get(key.name, 'json');
+          if (logEntry) {
+            logs.push(logEntry);
           }
         }
-      } while (cursor);
-
-      if (records.length === 0) {
-        console.log('No records found in the specified time range');
+        
+        cursor = result.cursor;
+        listComplete = result.list_complete;
+      }
+      
+      if (logs.length === 0) {
+        console.log('没有找到需要归档的日志');
         return;
       }
-
-      // 将记录转换为JSONL格式
-      const jsonlContent = records.map(record => JSON.stringify(record)).join('\n');
-
-      // 将文件保存到 R2
-      await env.ARCHIVE_BUCKET.put(archiveFileName, jsonlContent, {
-        customMetadata: {
-          recordCount: records.length.toString(),
-          timeRange: `${startTimestamp} to ${timestamp}`
-        }
-      });
-
-      // 删除已归档的记录
-      for (const record of records) {
-        const key = `request:${record.timestamp}:${record.id}`;  // 确保键的构造正确
-        await env.REQUEST_LOG.delete(key);
+      
+      // 将日志转换为 JSONL 格式
+      const jsonlContent = logs.map(log => JSON.stringify(log)).join('\n');
+      
+      // 上传到 R2 存储桶
+      const fileName = `${dateStr}.jsonl`;
+      await env.STARRINA_LOGS.put(fileName, jsonlContent);
+      
+      // 删除已归档的日志
+      for (const key of await env.REQUEST_LOG.list({ prefix: 'request:' })) {
+        await env.REQUEST_LOG.delete(key.name);
       }
-
-      console.log(`Successfully archived ${records.length} records to ${archiveFileName}`);
+      
+      console.log(`成功归档 ${logs.length} 条日志到 ${fileName}`);
+      
     } catch (error) {
-      console.error('Error during archival process:', error);
-      throw error;
+      console.error('归档日志时发生错误:', error);
     }
   }
 };
