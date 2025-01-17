@@ -1,0 +1,6 @@
+name = "kvlogs"
+main = "archiver.mjs"
+compatibility_date = "2025-01-16"
+
+[observability.logs]
+enabled = true
