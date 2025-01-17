@@ -6,8 +6,7 @@ export default {
     try {
       // 获取当前日期（北京时间）
       const date = new Date();
-      date.setHours(date.getHours() + 8); // 转换为北京时间
-      const dateStr = date.toISOString().split('T')[0];
+      const dateStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai' }).format(date).split('/').join('-');
       
       // 初始化循环变量
       let batchNumber = 1;
@@ -25,6 +24,12 @@ export default {
           limit: 160 
         });
 
+        // 如果没有日志了，退出循环
+        if (result.keys.length === 0) {
+          logsRemaining = false;
+          break;
+        }
+
         // 读取日志内容
         for (const key of result.keys) {
           const logEntry = await env.REQUEST_LOG.get(key.name, 'json');
@@ -32,23 +37,16 @@ export default {
             logs.push({ ...logEntry, key: key.name });
           }
         }
-        
-        // 如果没有日志了，退出循环
-        if (logs.length === 0) {
-          logsRemaining = false;
-          break;
-        }
-        
+
         // 将日志转换为 JSONL 格式
         const jsonlContent = logs.map(log => JSON.stringify(log)).join('\n');
         
         // 上传到 R2 存储桶
         const fileName = `${dateStr}-${batchNumber}.jsonl`;
         await env.STARRINA_LOGS.put(fileName, jsonlContent);
-        
-        // 删除已归档的日志
+
+        // 顺序删除已归档的日志，确保不超出内存限制
         for (const log of logs) {
-          // 确保已归档日志删除
           await env.REQUEST_LOG.delete(log.key);
         }
 
@@ -57,6 +55,11 @@ export default {
         // 更新游标和批次编号
         cursor = result.cursor;
         batchNumber++;
+
+        // 如果游标为空，说明所有日志都已处理完
+        if (!cursor) {
+          logsRemaining = false;
+        }
       }
 
     } catch (error) {
